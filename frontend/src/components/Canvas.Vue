@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const ctxRef = ref<CanvasRenderingContext2D | null>(null)
+
+const canvasHeight = ref(window.innerHeight)
 
 const scale = ref(1)
 const offsetX = ref(0)
@@ -33,8 +35,7 @@ const handleWheel = (e: WheelEvent) => {
   if (e.deltaY < 0) {
     scale.value += 0.1
   } else {
-    scale.value -= 0.1
-    if (scale.value < 0.1) scale.value = 0.1 // Prevent zooming out too much
+    scale.value = Math.max(0.1, scale.value - 0.1) // Don't let it go below 0.1
   }
   drawCanvas()
   e.preventDefault()
@@ -44,14 +45,13 @@ const drawCanvas = () => {
   const canvas = canvasRef.value
   const ctx = ctxRef.value
   if (canvas && ctx) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height) // Clear the canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.save()
 
-    // Apply zoom and pan transformations
     ctx.translate(offsetX.value, offsetY.value)
     ctx.scale(scale.value, scale.value)
 
-    // Example: Draw a grid
+    // Example grid
     ctx.beginPath()
     for (let i = 0; i < canvas.width; i += 50) {
       ctx.moveTo(i, 0)
@@ -66,25 +66,41 @@ const drawCanvas = () => {
   }
 }
 
+const updateCanvasHeight = () => {
+  canvasHeight.value = window.innerHeight
+  if (canvasRef.value) {
+    canvasRef.value.height = window.innerHeight
+    drawCanvas()
+  }
+}
+
 onMounted(() => {
   const canvas = canvasRef.value
-  const ctx = canvas?.getContext('2d')
-  if (canvas && ctx) {
-    ctxRef.value = ctx
-    drawCanvas()
+  if (canvas) {
+    canvas.height = canvasHeight.value
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctxRef.value = ctx
+      drawCanvas()
 
-    // Event listeners for drag and zoom
-    canvas.addEventListener('mousedown', handleMouseDown)
-    canvas.addEventListener('mousemove', handleMouseMove)
-    canvas.addEventListener('mouseup', handleMouseUp)
-    canvas.addEventListener('wheel', handleWheel)
+      canvas.addEventListener('mousedown', handleMouseDown)
+      canvas.addEventListener('mousemove', handleMouseMove)
+      canvas.addEventListener('mouseup', handleMouseUp)
+      canvas.addEventListener('wheel', handleWheel)
+    }
   }
+
+  window.addEventListener('resize', updateCanvasHeight)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateCanvasHeight)
 })
 </script>
 
 <template>
   <div class="canvas-container">
-    <canvas ref="canvasRef" width="1000" height="1000"></canvas>
+    <canvas ref="canvasRef" width="1000" :height="canvasHeight"></canvas>
   </div>
 </template>
 
@@ -95,6 +111,7 @@ onMounted(() => {
   align-items: center;
   min-height: 100vh;
   background-color: #f0f0f0;
+  overflow: hidden;
 }
 
 canvas {
