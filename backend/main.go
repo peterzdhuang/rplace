@@ -10,7 +10,7 @@ import (
 
 func main() {
 
-	go server.
+	go server.HubInstance.Run()
 
 	r := gin.Default()
 	r.Use(func(c *gin.Context) {

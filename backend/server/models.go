@@ -3,9 +3,19 @@ package server
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+)
+
+const (
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 512
+	boardWidth     = 1000
+	boardHeight    = 1000
 )
 
 type Colour struct {
@@ -15,16 +25,15 @@ type Colour struct {
 }
 
 type Pixel struct {
-	Username string `json:"username"`
-	Colour   Colour `json:"colour"`
-	X        int    `json:"x"`
-	Y        int    `json:"y"`
+	Colour Colour `json:"colour"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
 }
 
 type Board struct {
 	Width  int
 	Height int
-	Pixels map[string]*Pixel
+	Pixels [boardWidth][boardHeight]Pixel
 	mu     sync.RWMutex
 }
 
@@ -35,14 +44,18 @@ type Client struct {
 	Username string
 }
 
-type BoardState struct {
-	Type   string            `json:"type"`
-	Pixels map[string]*Pixel `json:"pixels"`
-	uuid   uuid.UUID         `json:"uuid"`
+type InitBoardState struct {
+	Type   string    `json:"init"`
+	Pixels [][]Pixel `json:"pixels"`
+}
+type Update struct {
+	Type       string     `json:"update"`
+	Pixel      Pixel      `json:"pixel"`
+	SenderUUID uuid.UUIDs `json:"senderUUID"`
 }
 
 type Hub struct {
-	clients    map[string]*Client
+	clients    map[uuid.UUID]*Client
 	register   chan *Client
 	unregister chan *Client
 	broadcast  chan []byte
@@ -57,9 +70,8 @@ var (
 		broadcast:  make(chan []byte),
 	}
 	board = &Board{
-		Width:  1000,
-		Height: 1000,
-		Pixels: make(map[string]*Pixel),
+		Width:  boardWidth,
+		Height: boardHeight,
 	}
 
 	upgrader = websocket.Upgrader{
