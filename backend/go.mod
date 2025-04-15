@@ -4,7 +4,7 @@ go 1.24.1
 
 require (
 	github.com/gin-gonic/gin v1.10.0
-	github.com/peterzdhuang/rplace/backend/server v0.0.0-20250414232824-cbf41f9663ed
+	github.com/peterzdhuang/rplace/backend/server v0.0.0-20250415010111-65426f653ebc
 )
 
 require (

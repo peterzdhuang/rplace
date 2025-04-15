@@ -53,6 +53,8 @@ github.com/peterzdhuang/rplace/backend/server v0.0.0-20250411031944-d650d72751c3
 github.com/peterzdhuang/rplace/backend/server v0.0.0-20250411031944-d650d72751c3/go.mod h1:LmD+hUp+cs8x+LJIzy22g2vFPRh/NB+VD0rk7UHnHno=
 github.com/peterzdhuang/rplace/backend/server v0.0.0-20250414232824-cbf41f9663ed h1:OKqdvCy+LdfXIKoT9A9cdHoCiJvjw+gpLwImZzumIyw=
 github.com/peterzdhuang/rplace/backend/server v0.0.0-20250414232824-cbf41f9663ed/go.mod h1:LxMuuEKqzga85BgSgZ1U3F3vvLxZUMZicaza1FQkOyo=
+github.com/peterzdhuang/rplace/backend/server v0.0.0-20250415010111-65426f653ebc h1:XYZDaRst2KTfg/VVCoy7Pg/Sx2UZ1Kxy1nZI/+PFKMs=
+github.com/peterzdhuang/rplace/backend/server v0.0.0-20250415010111-65426f653ebc/go.mod h1:LxMuuEKqzga85BgSgZ1U3F3vvLxZUMZicaza1FQkOyo=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
