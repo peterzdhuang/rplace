@@ -13,7 +13,7 @@ import (
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-Hub.register:
+		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client.uuid] = client
 			h.mu.Unlock()
@@ -48,7 +48,7 @@ func (h *Hub) Run() {
 
 func (c *Client) Read() {
 	defer func() {
-		Hub.unregister <- c
+		HubInstance.unregister <- c
 		c.Socket.Close()
 	}()
 
@@ -69,14 +69,50 @@ func (c *Client) Read() {
 			}
 			break // Exit loop on error
 		}
-		log.Printf("Client ReadPump: Received message from %s: Pos=%v, Rgb=%v", c.uuid, msg.Pos, msg.Rgb)
+		log.Printf("Client ReadPump: Received message from %s", c.uuid)
 
 		msg.SenderUUID = c.uuid
-		Hub.broadcast <- msg
-
+		HubInstance.broadcast <- msg
 	}
 }
 
+func (c *Client) Write() {
+	ticker := time.NewTicker(pingPeriod)
+
+	defer func() {
+		ticker.Stop()
+		c.Socket.Close()
+	}()
+
+	for {
+		select {
+		case message, ok := <-c.Send:
+			c.Socket.SetWriteDeadline(time.Now().Add(writeWait))
+
+			if !ok {
+				log.Printf("Client WritePump: Hub closed send channel for %s", c.uuid)
+				c.Socket.WriteMessage(websocket.CloseMessage, []byte{})
+				return // Exit l
+			}
+
+			err := c.Socket.WriteJSON(message)
+
+			if err != nil {
+				log.Printf("Client WritePump: Sent message to %s", c.uuid)
+				return
+			}
+
+		case <-ticker.C:
+			c.Socket.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Socket.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("Client WritePump: Ping Error (%s): %v", c.uuid, err)
+				return
+			}
+
+		}
+
+	}
+}
 func InitWebSocket() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
@@ -96,20 +132,20 @@ func InitWebSocket() gin.HandlerFunc {
 		client := &Client{
 			uuid:     uuid.New(),
 			Socket:   conn,
-			Send:     make(chan []byte, 256),
+			Send:     make(chan Update, 256),
 			Username: username,
 		}
 
 		board.mu.RLock()
 		boardState := InitBoardState{
-			Type:   "init",
 			Pixels: board.Pixels,
 		}
 		initialState, _ := json.Marshal(boardState)
 		board.mu.RUnlock()
 
-		client.Send <- initialState
+		client.Socket.WriteJSON(initialState)
 
 		go client.Read()
+		go client.Write()
 	}
 }

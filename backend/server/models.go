@@ -33,33 +33,31 @@ type Pixel struct {
 type Board struct {
 	Width  int
 	Height int
-	Pixels [boardWidth][boardHeight]Pixel
+	Pixels [boardHeight][boardWidth]Pixel
 	mu     sync.RWMutex
 }
 
 type Client struct {
 	uuid     uuid.UUID
 	Socket   *websocket.Conn
-	Send     chan []byte
+	Send     chan Update
 	Username string
 }
 
 type InitBoardState struct {
-	Type   string    `json:"init"`
-	Pixels [][]Pixel `json:"pixels"`
+	Pixels [boardHeight][boardWidth]Pixel `json:"pixels"`
 }
 type Update struct {
-	Type       string     `json:"update"`
-	Pixel      Pixel      `json:"pixel"`
-	SenderUUID uuid.UUIDs `json:"senderUUID"`
+	Pixel      Pixel     `json:"pixel"`
+	SenderUUID uuid.UUID `json:"-"`
 }
 
 type Hub struct {
 	clients    map[uuid.UUID]*Client
 	register   chan *Client
 	unregister chan *Client
-	broadcast  chan []byte
-	mu         sync.Mutex
+	broadcast  chan Update
+	mu         sync.RWMutex
 }
 
 var (
@@ -67,7 +65,7 @@ var (
 		clients:    make(map[uuid.UUID]*Client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
-		broadcast:  make(chan []byte),
+		broadcast:  make(chan Update),
 	}
 	board = &Board{
 		Width:  boardWidth,
