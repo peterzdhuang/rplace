@@ -6,6 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/peterzdhuang/rplace/backend/server v0.0.0-20250415010111-65426f653ebc
 )
+replace github.com/peterzdhuang/rplace/backend/server  => ./server
 
 require (
 	github.com/bytedance/sonic v1.13.2 // indirect

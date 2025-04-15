@@ -29,7 +29,8 @@ func (h *Hub) Run() {
 			}
 			h.mu.Unlock()
 		case message := <-h.broadcast:
-			log.Printf("DEBUG: Broadcasting message from %s", message.SenderUUID)
+			log.Printf("DEBUG: Broadcasting message from %s: %+v", message.SenderUUID, message)
+
 			h.mu.RLock()
 			for uuid, client := range h.clients {
 				if uuid != message.SenderUUID {
@@ -104,6 +105,7 @@ func (c *Client) Write() {
 				c.Socket.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
+			log.Printf("DEBUG: Write message from %s: %+v", message.SenderUUID, message)
 			err := c.Socket.WriteJSON(message)
 			if err != nil {
 				log.Printf("Client WritePump Error (%s): %v", c.uuid, err)
@@ -138,6 +140,7 @@ func InitWebSocket() gin.HandlerFunc {
 			Send:     make(chan Update, 256),
 			Username: username,
 		}
+		HubInstance.clients[client.uuid] = client
 		log.Printf("DEBUG: New client created: %s (%s)", client.Username, client.uuid)
 
 		board.mu.RLock()
