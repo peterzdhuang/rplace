@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"log"
 	"time"
 
@@ -11,6 +10,8 @@ import (
 )
 
 func (h *Hub) Run() {
+
+	board.InitBoard()
 	for {
 		select {
 		case client := <-h.register:
@@ -81,6 +82,8 @@ func (c *Client) Read() {
 		}
 		log.Printf("DEBUG: Received message from client %s", c.uuid)
 		msg.SenderUUID = c.uuid
+		msg.Type = "update"
+
 		HubInstance.broadcast <- msg
 	}
 }
@@ -145,13 +148,13 @@ func InitWebSocket() gin.HandlerFunc {
 
 		board.mu.RLock()
 		boardState := InitBoardState{
+			Type:   "init",
 			Pixels: board.Pixels,
 		}
-		initialState, _ := json.Marshal(boardState)
 		board.mu.RUnlock()
 
 		log.Printf("DEBUG: Sending initial board state to client %s", client.uuid)
-		client.Socket.WriteJSON(initialState)
+		client.Socket.WriteJSON(boardState)
 
 		go client.Read()
 		go client.Write()

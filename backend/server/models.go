@@ -14,20 +14,14 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = (pongWait * 15) / 10
 	maxMessageSize = 512
-	boardWidth     = 1000
-	boardHeight    = 1000
+	boardWidth     = 10
+	boardHeight    = 10
 )
 
-type Colour struct {
+type Pixel struct {
 	R uint8 `json:"r"`
 	G uint8 `json:"g"`
 	B uint8 `json:"b"`
-}
-
-type Pixel struct {
-	Colour Colour `json:"colour"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
 }
 
 type Board struct {
@@ -45,10 +39,14 @@ type Client struct {
 }
 
 type InitBoardState struct {
+	Type   string                         `json:"type"`
 	Pixels [boardHeight][boardWidth]Pixel `json:"pixels"`
 }
 type Update struct {
+	Type       string    `json:"type"`
 	Pixel      Pixel     `json:"pixel"`
+	X          int       `json:"x"`
+	Y          int       `json:"y"`
 	SenderUUID uuid.UUID `json:"-"`
 }
 
