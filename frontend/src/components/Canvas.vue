@@ -3,40 +3,43 @@ import { ref, onMounted, onBeforeUnmount, reactive, computed, nextTick } from 'v
 
 // --- Configuration ---
 const PIXEL_SIZE = 15 // Base size of each pixel block
-const GRID_WIDTH = 10// Grid width in pixels
+const GRID_WIDTH = 10 // Grid width in pixels
 const GRID_HEIGHT = 10 // Grid height in pixels
-const WS_URL = 'ws://localhost:8000/ws'
+const WS_URL = 'ws://localhost:8000/ws' // MAKE SURE THIS IS YOUR CORRECT WEBSOCKET URL
 
 // Changed from hex to RGB objects
 const COLOR_PALETTE = [
-  { r: 255, g: 255, b: 255 }, // White
-  { r: 228, g: 228, b: 228 }, // Light Grey
-  { r: 136, g: 136, b: 136 }, // Grey
-  { r: 34, g: 34, b: 34 },    // Black
-  { r: 255, g: 167, b: 209 }, // Pink
-  { r: 229, g: 0, b: 0 },     // Red
-  { r: 229, g: 149, b: 0 },   // Orange
-  { r: 160, g: 106, b: 66 },  // Brown
-  { r: 229, g: 217, b: 0 },   // Yellow
-  { r: 148, g: 224, b: 68 },  // Light Green
-  { r: 2, g: 190, b: 1 },     // Green
-  { r: 0, g: 211, b: 221 },   // Cyan
-  { r: 0, g: 131, b: 199 },   // Light Blue
-  { r: 0, g: 0, b: 234 },     // Blue
-  { r: 207, g: 110, b: 228 }, // Light Purple
-  { r: 130, g: 0, b: 128 }    // Purple
+ { r: 255, g: 255, b: 255 }, // White
+ { r: 228, g: 228, b: 228 }, // Light Grey
+ { r: 136, g: 136, b: 136 }, // Grey
+ { r: 34, g: 34, b: 34 },   // Black
+ { r: 255, g: 167, b: 209 }, // Pink
+ { r: 229, g: 0, b: 0 },     // Red
+ { r: 229, g: 149, b: 0 },   // Orange
+ { r: 160, g: 106, b: 66 },  // Brown
+ { r: 229, g: 217, b: 0 },   // Yellow
+ { r: 148, g: 224, b: 68 },  // Light Green
+ { r: 2, g: 190, b: 1 },     // Green
+ { r: 0, g: 211, b: 221 },   // Cyan
+ { r: 0, g: 131, b: 199 },   // Light Blue
+ { r: 0, g: 0, b: 234 },     // Blue
+ { r: 207, g: 110, b: 228 }, // Light Purple
+ { r: 130, g: 0, b: 128 }    // Purple
 ]
 const MIN_ZOOM_FOR_GRID_LINES = 5 // Only draw grid lines if scaled pixel size is > this
+
+// --- App State ---
+const isLoggedIn = ref(false) // Added for login state
+const username = ref('') // Added for login input
 
 // --- Canvas Refs and State ---
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const ctxRef = ref<CanvasRenderingContext2D | null>(null)
-// Canvas display size will be set dynamically
-const canvasWidth = ref(window.innerWidth) // Use window size initially
+const canvasWidth = ref(window.innerWidth)
 const canvasHeight = ref(window.innerHeight)
 
 // --- Pan & Zoom State ---
-const scale = ref(0.5) // Start slightly zoomed out for large canvas
+const scale = ref(0.5)
 const offsetX = ref(0)
 const offsetY = ref(0)
 const isPanning = ref(false)
@@ -45,19 +48,17 @@ const startY = ref(0)
 const hasMoved = ref(false)
 
 // --- Grid & Pixel State ---
-// Changed to store RGB objects instead of hex strings
-const pixels = reactive<{ data: {r: number, g: number, b: number}[][] }>({ data: [] }) // Initialize empty
+const pixels = reactive<{ data: {r: number, g: number, b: number}[][] }>({ data: [] })
 const ws = ref<WebSocket | null>(null)
-const isLoading = ref(true) // Start in loading state
-const loadError = ref<string | null>(null) // To show errors
+const isLoading = ref(false) // Initially not loading until login attempt
+const loadError = ref<string | null>(null)
 
 // --- Modal & Selection State ---
 const isModalVisible = ref(false)
 const selectedPixelCoords = reactive<{ x:number; y:number }>({ x:-1, y:-1 })
-const draftColour = ref<{ r:number; g:number; b:number } | null>(null)   // 👈 NEW
+const draftColour = ref<{ r:number; g:number; b:number } | null>(null) // Holds the temporarily selected colour
 
 // --- Computed Properties ---
-// These represent the total size of the grid content in pixels (at scale=1)
 const canvasContentWidth = computed(() => GRID_WIDTH * PIXEL_SIZE)
 const canvasContentHeight = computed(() => GRID_HEIGHT * PIXEL_SIZE)
 
@@ -66,7 +67,6 @@ const screenToGridCoords = (clientX: number, clientY: number): { x: number; y: n
   const canvas = canvasRef.value
   if (!canvas) return null
   const rect = canvas.getBoundingClientRect()
-  // Inverse transform: Screen -> Canvas -> World -> Grid
   const canvasX = clientX - rect.left
   const canvasY = clientY - rect.top
   const worldX = (canvasX - offsetX.value) / scale.value
@@ -81,70 +81,85 @@ const screenToGridCoords = (clientX: number, clientY: number): { x: number; y: n
 }
 
 // Helper function to convert RGB to CSS color string
-const rgbToString = (colour: {r: number, g: number, b: number}): string => {
+const rgbToString = (colour: {r: number, g: number, b: number} | null): string => {
+  if (!colour) return 'transparent'; // Handle null case if needed
   return `rgb(${colour.r}, ${colour.g}, ${colour.b})`;
 }
 
+// --- Login Logic ---
+const handleLogin = () => {
+  if (!username.value.trim()) {
+    alert('Please enter a username.');
+    return;
+  }
+  isLoggedIn.value = true;
+  // Wait for the canvas element to be rendered after login
+  nextTick(() => {
+    setupCanvas(); // Setup canvas context
+    connectWebSocket(); // Connect WebSocket AFTER login and canvas setup
+  });
+};
+
 // --- WebSocket Logic ---
 const connectWebSocket = () => {
-  if (ws.value) return; // Avoid multiple connections
+  if (ws.value || !isLoggedIn.value) return; // Only connect if logged in
 
   console.log('Attempting to connect to WebSocket:', WS_URL);
-  isLoading.value = true;
+  isLoading.value = true; // Start loading now
   loadError.value = null;
   ws.value = new WebSocket(WS_URL);
 
   ws.value.onopen = () => {
     console.log('WebSocket connection established.');
-    // Optional: Request initial state explicitly if backend requires it
+    // Optional: Send username or token if backend needs it
+    // sendWebSocketMessage({ type: 'auth', username: username.value });
+    // Optional: Request initial state if needed (backend might send it automatically onopen)
     // sendWebSocketMessage({ type: 'get_initial_state' });
   };
 
   ws.value.onmessage = (event) => {
     try {
       const message = JSON.parse(event.data);
-      console.log(message)
       console.log('WebSocket message received:', message.type);
 
       if (message.type === 'init' && Array.isArray(message.pixels)) {
         console.log(`Received initial state with ${message.pixels.length} rows.`);
-        // Basic validation (can be more robust)
         if (message.pixels.length > 0 && message.pixels[0]?.length > 0) {
-            // Assuming backend sends full grid of RGB values
-            pixels.data = message.pixels;
-            isLoading.value = false; // Data loaded
-            loadError.value = null;
-            console.log('Initial pixel state loaded.');
-            drawCanvas();
+          pixels.data = message.pixels;
+          isLoading.value = false;
+          loadError.value = null;
+          console.log('Initial pixel state loaded.');
+          nextTick(() => { // Ensure data is set before centering/drawing
+            centerView(); // Center view after getting initial data
+            drawCanvas(); // Draw initial state
+          });
         } else {
-             throw new Error('Received initial state pixel data is empty or invalid.');
+           throw new Error('Received initial state pixel data is empty or invalid.');
         }
       } else if (message.type === 'update') {
-
-        const { x, y, pixel } = message;  // Expecting RGB object
-        console.log(x, y, pixel)
+        const { x, y, pixel } = message; // Expecting pixel: {r, g, b}
+        console.log(`Update received for (${x}, ${y}):`, pixel);
         if (
-          pixels.data[y] && // Check row exists
+          pixels.data[y] &&
+          pixel && typeof pixel === 'object' &&
           x >= 0 && x < GRID_WIDTH &&
           y >= 0 && y < GRID_HEIGHT
         ) {
-          pixels.data[y][x] = pixel;  // Store RGB object
-          // Optimize: Only redraw if the updated pixel is visible
-          // For simplicity now, redraw full canvas
-          drawCanvas();
-          // Or implement drawPixel if performance is critical
-          // drawPixelIfVisible(x, y, colour);
+            // Update the reactive data structure - Vue handles reactivity
+          pixels.data[y][x] = pixel;
+          drawCanvas()
+        } else {
+            console.warn('Invalid update received:', message);
         }
       } else {
-          console.warn('Unknown or unhandled WebSocket message type:', message.type);
+        console.warn('Unknown or unhandled WebSocket message type:', message.type);
       }
     } catch (error: any) {
       console.error('Failed to parse WebSocket message or handle update:', error);
       loadError.value = `Error processing message: ${error.message || 'Unknown error'}`;
-      isLoading.value = false; // Stop loading on error
-      // Maybe initialize empty grid as fallback?
-       if (!pixels.data.length) initializeEmptyGrid(true); // Init if empty on error
-       drawCanvas();
+      isLoading.value = false;
+      if (!pixels.data.length) initializeEmptyGrid(true);
+      drawCanvas(); // Draw the error state or empty grid
     }
   };
 
@@ -152,52 +167,67 @@ const connectWebSocket = () => {
     console.error('WebSocket error:', error);
     loadError.value = 'WebSocket connection error. Please try refreshing.';
     isLoading.value = false;
-    ws.value = null; // Clear WS ref on error
-    if (!pixels.data.length) initializeEmptyGrid(true); // Init if empty on error
-    drawCanvas();
+    ws.value = null;
+    if (!pixels.data.length) initializeEmptyGrid(true);
+    drawCanvas(); // Draw error state
   };
 
   ws.value.onclose = (event) => {
     console.log('WebSocket connection closed:', event.code, event.reason);
-    // Only show error if it wasn't a clean closure maybe?
     if (!event.wasClean && !loadError.value) {
        loadError.value = 'WebSocket connection closed unexpectedly.';
     }
-    isLoading.value = false; // Ensure loading stops
+    isLoading.value = false;
     ws.value = null;
-     if (!pixels.data.length) initializeEmptyGrid(true); // Init if empty on close without data
-     drawCanvas();
-    // Optional: Implement reconnection logic here
+    // Don't initialize empty grid here necessarily, user might be logged out
+     if (isLoggedIn.value && !pixels.data.length) {
+         initializeEmptyGrid(true); // Initialize if logged in and data is missing
+     }
+     drawCanvas(); // Draw current state (maybe error message)
   };
 };
 
 const sendWebSocketMessage = (message: object) => {
   if (ws.value && ws.value.readyState === WebSocket.OPEN) {
     ws.value.send(JSON.stringify(message));
+    console.log("WS message sent: ", message);
   } else {
     console.error('WebSocket is not connected or not open.');
-    // Optionally notify user
+    loadError.value = 'Cannot send update: Disconnected from server.'; // Notify user
+    // Optional: Attempt to reconnect automatically, but be careful of loops
+     // if (!ws.value && isLoggedIn.value) connectWebSocket();
+     drawCanvas(); // Redraw to show error message
   }
 };
 
 const centerView = () => {
-    const canvas = canvasRef.value;
-    if (!canvas) return;
-    // Calculate desired scale to fit maybe 1/4 of the grid width initially
-    const initialScale = Math.min(
-        canvas.clientWidth / (canvasContentWidth.value / 2),
-        canvas.clientHeight / (canvasContentHeight.value / 2)
-    );
-     scale.value = Math.max(0.05, initialScale); // Limit minimum initial zoom
+   const canvas = canvasRef.value;
+   if (!canvas || !pixels.data.length) return; // Don't center if canvas/data not ready
 
-    // Center the grid in the canvas
-    offsetX.value = (canvas.clientWidth - canvasContentWidth.value * scale.value) / 2;
-    offsetY.value = (canvas.clientHeight - canvasContentHeight.value * scale.value) / 2;
-    console.log(`Centering view. Scale: ${scale.value}, Offset: (${offsetX.value}, ${offsetY.value})`);
+   // Ensure canvas dimensions are known
+   const viewWidth = canvas.clientWidth;
+   const viewHeight = canvas.clientHeight;
+   if (viewWidth === 0 || viewHeight === 0) {
+       console.warn("Cannot center view: Canvas dimensions are zero.");
+       return; // Avoid division by zero or nonsensical centering
+   }
+
+   // Scale to fit the entire grid (or a portion) initially
+   const fitScale = Math.min(
+     viewWidth / canvasContentWidth.value,
+     viewHeight / canvasContentHeight.value
+   ) * 0.9; // Add some padding
+   scale.value = Math.max(0.1, fitScale); // Limit minimum zoom
+
+   offsetX.value = (viewWidth - canvasContentWidth.value * scale.value) / 2;
+   offsetY.value = (viewHeight - canvasContentHeight.value * scale.value) / 2;
+   console.log(`Centering view. Scale: ${scale.value}, Offset: (${offsetX.value}, ${offsetY.value})`);
 }
 
 // --- Event Handlers ---
 const handleMouseDown = (e: MouseEvent) => {
+  if (!isLoggedIn.value) return; // Ignore clicks if not logged in
+  // Prevent starting pan if clicking inside the modal
   if ((e.target as HTMLElement)?.closest('.colour-modal')) return;
   isPanning.value = true;
   hasMoved.value = false;
@@ -207,172 +237,220 @@ const handleMouseDown = (e: MouseEvent) => {
 };
 
 const handleMouseMove = (e: MouseEvent) => {
-  if (isPanning.value) {
-    const currentX = e.clientX - startX.value;
-    const currentY = e.clientY - startY.value;
-    if (!hasMoved.value && (Math.abs(e.clientX - (startX.value + offsetX.value)) > 5 || Math.abs(e.clientY - (startY.value + offsetY.value)) > 5)) {
-      hasMoved.value = true;
-    }
-    if (hasMoved.value) {
-      offsetX.value = currentX;
-      offsetY.value = currentY;
-      requestAnimationFrame(drawCanvas); // Use rAF for smoother panning
-    }
+  if (!isLoggedIn.value || !isPanning.value) return;
+
+  const currentX = e.clientX - startX.value;
+  const currentY = e.clientY - startY.value;
+  // Add a threshold to distinguish click from drag
+  if (!hasMoved.value && (Math.abs(e.clientX - (startX.value + offsetX.value)) > 5 || Math.abs(e.clientY - (startY.value + offsetY.value)) > 5)) {
+    hasMoved.value = true;
+  }
+  if (hasMoved.value) {
+    offsetX.value = currentX;
+    offsetY.value = currentY;
+    requestAnimationFrame(drawCanvas); // Redraw during panning
   }
 };
 
 const handleMouseUp = (e: MouseEvent) => {
+  if (!isLoggedIn.value) return;
+
   // Check if mouseup occurred over the modal - if so, do nothing here
   if ((e.target as HTMLElement)?.closest('.colour-modal')) {
-     // If panning was active, reset it, but don't process click
      if (isPanning.value) {
-         isPanning.value = false;
-         if (canvasRef.value) canvasRef.value.style.cursor = 'grab';
+       isPanning.value = false;
+       if (canvasRef.value) canvasRef.value.style.cursor = 'grab';
      }
-     return;
+     return; // Don't process click if mouse up is on modal
   }
 
   if (isPanning.value) {
-    if (!hasMoved.value && e.target === canvasRef.value) { // Ensure click was on canvas
-      handleCanvasClick(e);
+    if (!hasMoved.value && e.target === canvasRef.value) {
+      handleCanvasClick(e); // Treat as click if no movement
     }
     isPanning.value = false;
     if (canvasRef.value) canvasRef.value.style.cursor = 'grab';
   }
-  hasMoved.value = false; // Reset move flag
+  hasMoved.value = false;
+  // Optional: Redraw on mouse up even if not panning, to potentially show updates
+  // requestAnimationFrame(drawCanvas);
 };
 
 const handleCanvasClick = (e: MouseEvent) => {
+  if (!isLoggedIn.value) return;
+
   const coords = screenToGridCoords(e.clientX, e.clientY);
   if (coords) {
-    // Deselect previous, select new
-     const previousX = selectedPixelCoords.x;
-     const previousY = selectedPixelCoords.y;
+    const previousX = selectedPixelCoords.x;
+    const previousY = selectedPixelCoords.y;
+
+    // Update selection
     selectedPixelCoords.x = coords.x;
     selectedPixelCoords.y = coords.y;
-    isModalVisible.value = true;
+    draftColour.value = null; // Reset draft colour when selecting new pixel
+    isModalVisible.value = true; // Show the modal
     console.log(`Selected pixel: (${coords.x}, ${coords.y})`);
-    // Redraw needed to show selection highlight
-    // If previous pixel was different and visible, it also needs redraw to remove highlight
-    drawCanvas(); // Simple redraw all for now
+
+    // Redraw needed to show new selection highlight and remove old one
+     // This will also display any pending updates received via WebSocket
+    requestAnimationFrame(drawCanvas);
+
   } else {
-    // Click outside grid
+    // Click outside grid - close modal if open
     if (isModalVisible.value) {
-      closeModal();
+       closeModal();
     }
+    // Optional: Redraw even if clicking outside grid, to potentially show updates
+    // requestAnimationFrame(drawCanvas);
   }
 };
 
 const handleWheel = (e: WheelEvent) => {
+  if (!isLoggedIn.value) return;
+
   e.preventDefault();
   const canvas = canvasRef.value;
   if (!canvas) return;
 
   const rect = canvas.getBoundingClientRect();
-  const mouseX = e.clientX - rect.left; // Mouse X relative to canvas
-  const mouseY = e.clientY - rect.top;  // Mouse Y relative to canvas
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
 
-  // World coordinates before zoom (point under mouse)
   const worldXBefore = (mouseX - offsetX.value) / scale.value;
   const worldYBefore = (mouseY - offsetY.value) / scale.value;
 
-  // Calculate new scale (logarithmic zoom feels better)
-  const scaleFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1; // Zoom factor
-  const newScale = Math.max(0.01, Math.min(scale.value * scaleFactor, 50)); // Clamp zoom level
+  const scaleFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const newScale = Math.max(0.05, Math.min(scale.value * scaleFactor, 50)); // Clamp zoom
 
-   // Calculate new offset to keep mouse point stationary
   offsetX.value = mouseX - worldXBefore * newScale;
   offsetY.value = mouseY - worldYBefore * newScale;
   scale.value = newScale;
 
-  requestAnimationFrame(drawCanvas); // Use rAF
+  requestAnimationFrame(drawCanvas); // Redraw on zoom
 };
 
 // --- Modal Actions ---
-const selectColour = (colour: {r: number, g: number, b: number}) => {
-  if (selectedPixelCoords.x !== -1 && selectedPixelCoords.y !== -1) {
-    console.log(`Placing colour RGB(${colour.r},${colour.g},${colour.b}) at (${selectedPixelCoords.x}, ${selectedPixelCoords.y})`);
-    
-    
-    sendWebSocketMessage({
-      type: 'update',
-      payload: {
-        x: selectedPixelCoords.x,
-        y: selectedPixelCoords.y,
-        colour: colour, // Send RGB object directly
-      }
-    });
-    // Don't clear selection here - wait for WS update or potential immediate redraw
-    closeModal(); // Close modal, redraw will happen
-  }
-};
 
+// Called when a colour swatch is clicked in the modal
+const chooseColour = (colour: {r:number; g:number; b:number}) => {
+  console.log("Draft colour chosen:", colour)
+  draftColour.value = colour; // Set the draft colour, DON'T send yet
+}
+
+// Called when the 'Confirm' button is clicked
 const confirmColour = () => {
   if (
     draftColour.value &&
     selectedPixelCoords.x !== -1 &&
     selectedPixelCoords.y !== -1
   ) {
+    console.log(`Confirming colour ${rgbToString(draftColour.value)} at (${selectedPixelCoords.x}, ${selectedPixelCoords.y})`);
+    // Optimistically update local state (Vue handles reactivity)
+    pixels.data[selectedPixelCoords.y][selectedPixelCoords.x] = draftColour.value;
+
+     // Send the update message to the WebSocket server
     sendWebSocketMessage({
-      type: 'place_pixel',
-      payload: {
-        x: selectedPixelCoords.x,
-        y: selectedPixelCoords.y,
-        colour: draftColour.value
-      }
-    })
-    closeModal()           // will also clear draftColour inside closeModal()
+      type: 'update',
+      x: selectedPixelCoords.x,
+      y: selectedPixelCoords.y,
+      pixel: {...draftColour.value} // Send a copy
+    });
+
+     // Close modal and redraw to show the optimistic update immediately
+    closeModal();
+     requestAnimationFrame(drawCanvas); // Explicitly redraw after optimistic update + close
+
+  } else {
+    console.warn("Confirm clicked but no draft colour or pixel selected.");
   }
 }
 
-
+// Called when 'Cancel' is clicked or modal is closed otherwise
 const closeModal = () => {
   const needsRedraw = selectedPixelCoords.x !== -1; // Need redraw if something was selected
   isModalVisible.value = false;
-  selectedPixelCoords.x = -1;
+  selectedPixelCoords.x = -1; // Deselect pixel
   selectedPixelCoords.y = -1;
+  draftColour.value = null; // Clear the draft colour
   if (needsRedraw) {
-      requestAnimationFrame(drawCanvas); // Redraw to remove selection highlight
+     // Redraw to remove selection highlight - this might also show pending WS updates
+      requestAnimationFrame(drawCanvas);
   }
 };
 
 // --- Drawing Logic ---
 const initializeEmptyGrid = (showWarning = false) => {
-    if(showWarning) console.warn(`Initializing fallback empty ${GRID_WIDTH}x${GRID_HEIGHT} grid locally.`);
-    // Create a large array efficiently (might still be slow)
-    const white = { r: 255, g: 255, b: 255 };  // White in RGB
-    pixels.data = Array(GRID_HEIGHT);
-    for(let y=0; y<GRID_HEIGHT; y++){
-        pixels.data[y] = Array(GRID_WIDTH).fill(white);
-    }
-    isLoading.value = false; // Ensure loading is set to false
+   if(showWarning) console.warn(`Initializing fallback empty ${GRID_WIDTH}x${GRID_HEIGHT} grid locally.`);
+   const white = { r: 255, g: 255, b: 255 };
+   pixels.data = Array.from({ length: GRID_HEIGHT }, () =>
+       Array(GRID_WIDTH).fill(null).map(() => ({ ...white })) // Ensure deep copy
+   );
+   isLoading.value = false;
 };
 
 const drawCanvas = () => {
   const canvas = canvasRef.value;
   const ctx = ctxRef.value;
-  if (!canvas || !ctx) return;
+  // Only draw if logged in and canvas is ready
+  if (!isLoggedIn.value || !canvas || !ctx) {
+     console.log("Draw skipped: Not logged in or canvas/context not ready.");
+     return;
+  }
 
   const dpr = window.devicePixelRatio || 1;
-  const viewWidth = canvas.clientWidth; // Display width
-  const viewHeight = canvas.clientHeight; // Display height
+  const viewWidth = canvas.clientWidth;
+  const viewHeight = canvas.clientHeight;
 
-  // Clear the canvas (physical pixels)
+  // Set actual buffer size based on DPR if it changed
+  if (canvas.width !== viewWidth * dpr || canvas.height !== viewHeight * dpr) {
+      canvas.width = viewWidth * dpr;
+      canvas.height = viewHeight * dpr;
+      console.log(`Canvas buffer resized to: ${canvas.width}x${canvas.height} (DPR: ${dpr})`);
+  }
+
+  // Clear canvas
   ctx.save();
-  ctx.resetTransform(); // Ensure clean state before clearing
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.resetTransform();
+  // Explicitly set the fill style before clearing for the canvas background
+  ctx.fillStyle = '#ffffff'; // Match the CSS background for the canvas element itself
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.restore();
 
-  // Apply DPR scaling for drawing
-  ctx.save();
-  ctx.scale(dpr, dpr);
+  // Handle loading/error state overlay (drawn without transforms)
+  if (isLoading.value || loadError.value) {
+      ctx.save();
+      ctx.scale(dpr, dpr); // Scale context for drawing text consistently
+      ctx.font = "16px Arial";
+      ctx.fillStyle = "#ffffff";
+      ctx.textAlign = "center";
+      const message = loadError.value || "Loading pixels...";
+      ctx.fillText(message, viewWidth / 2, viewHeight / 2);
+      ctx.restore();
+      return; // Don't draw grid if loading/error
+  }
 
-  // Apply pan and zoom
+  // If we got here, we are logged in, not loading, and have no errors, but maybe no data yet
+  if (!pixels.data || pixels.data.length === 0) {
+      console.warn("Draw skipped: Pixel data is not available yet.");
+      // Optionally draw a "waiting for data" message
+       ctx.save();
+       ctx.scale(dpr, dpr);
+       ctx.font = "16px Arial";
+       ctx.fillStyle = "#ffffff";
+       ctx.textAlign = "center";
+       ctx.fillText("Waiting for pixel data...", viewWidth / 2, viewHeight / 2);
+       ctx.restore();
+      return;
+  }
+
+
+  // Apply transforms for drawing grid content
+  ctx.save();
+  ctx.scale(dpr, dpr); // Apply DPR scaling for all drawing operations
   ctx.translate(offsetX.value, offsetY.value);
   ctx.scale(scale.value, scale.value);
 
   // --- Viewport Culling ---
-  // Calculate the range of grid cells visible in the current viewport
   const viewLeftWorld = -offsetX.value / scale.value;
   const viewTopWorld = -offsetY.value / scale.value;
   const viewRightWorld = (viewWidth - offsetX.value) / scale.value;
@@ -382,332 +460,429 @@ const drawCanvas = () => {
   const endCol = Math.min(GRID_WIDTH, Math.ceil(viewRightWorld / PIXEL_SIZE));
   const startRow = Math.max(0, Math.floor(viewTopWorld / PIXEL_SIZE));
   const endRow = Math.min(GRID_HEIGHT, Math.ceil(viewBottomWorld / PIXEL_SIZE));
-  // --- End Viewport Culling ---
-
-  // If grid data hasn't loaded yet, don't try to draw pixels
-  if (isLoading.value || !pixels.data.length) {
-      ctx.restore(); // Restore from DPR scale
-      // Optional: Draw loading text or spinner on canvas
-      ctx.save();
-      ctx.font = "16px Arial";
-      ctx.fillStyle = "#555";
-      ctx.textAlign = "center";
-      ctx.fillText(loadError.value || "Loading pixels...", viewWidth / 2, viewHeight / 2);
-      ctx.restore();
-      return;
-  }
-
 
   const scaledPixelSize = PIXEL_SIZE * scale.value;
   const drawGridLines = scaledPixelSize > MIN_ZOOM_FOR_GRID_LINES;
 
-  const defaultLineWidth = 0.5 / scale.value; // Thinner lines
-  const defaultStrokeStyle = '#E0E0E0'; // Lighter grey
-  const selectedLineWidth = 2.0 / scale.value; // Thicker selected border
-  const selectedStrokeStyle = '#FFFFFF';
-
-  // Set default line style once if possible
-  ctx.lineWidth = defaultLineWidth;
-  ctx.strokeStyle = defaultStrokeStyle;
+  const defaultLineWidth = 0.5 / scale.value; // Adjusted for scale
+  const defaultStrokeStyle = '#000000';
+  const selectedLineWidth = 1.5 / scale.value; // Adjusted for scale
+  const selectedStrokeStyleOuter = '#FFFFFF'; 
+  const selectedStrokeStyleInner = '#000000'; 
 
   // --- Draw Visible Pixels ---
   for (let y = startRow; y < endRow; y++) {
-    // Ensure row exists (important if data is loaded partially/incorrectly)
-    if (!pixels.data[y]) continue;
-
+    if (!pixels.data[y]) {
+        // console.warn(`Row ${y} not found in pixel data during draw.`);
+        continue; // Safety check
+    }
     for (let x = startCol; x < endCol; x++) {
-      // Default to black if missing
-      const colour = pixels.data[y][x] || { r: 0, g: 0, b: 0};
-      ctx.fillStyle = rgbToString(colour);  // Convert RGB object to CSS string
+      const colour = pixels.data[y][x];
+      if (!colour) {
+        // console.warn(`Pixel data missing at (${x}, ${y}) during draw.`);
+        ctx.fillStyle = 'rgb(255,255,255)'; // Draw black if data unexpectedly missing
+      } else {
+        ctx.fillStyle = rgbToString(colour);
+      }
       ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     }
   }
 
-    // --- Draw Grid Lines (Optional and Optimized) ---
-    if (drawGridLines) {
-        ctx.beginPath();
-        for (let x = startCol; x <= endCol; x++) {
-            ctx.moveTo(x * PIXEL_SIZE, startRow * PIXEL_SIZE);
-            ctx.lineTo(x * PIXEL_SIZE, endRow * PIXEL_SIZE);
-        }
-        for (let y = startRow; y <= endRow; y++) {
-            ctx.moveTo(startCol * PIXEL_SIZE, y * PIXEL_SIZE);
-            ctx.lineTo(endCol * PIXEL_SIZE, y * PIXEL_SIZE);
-        }
-        ctx.lineWidth = defaultLineWidth;
-        ctx.strokeStyle = defaultStrokeStyle;
-        ctx.stroke();
-    }
+  // --- Draw Grid Lines (if zoomed in enough) ---
+  if (drawGridLines) {
+      ctx.beginPath();
+      ctx.lineWidth = defaultLineWidth;
+      ctx.strokeStyle = defaultStrokeStyle;
+      // Vertical lines
+      for (let x = startCol; x <= endCol; x++) {
+          ctx.moveTo(x * PIXEL_SIZE, startRow * PIXEL_SIZE);
+          ctx.lineTo(x * PIXEL_SIZE, endRow * PIXEL_SIZE);
+      }
+      // Horizontal lines
+      for (let y = startRow; y <= endRow; y++) {
+          ctx.moveTo(startCol * PIXEL_SIZE, y * PIXEL_SIZE);
+          ctx.lineTo(endCol * PIXEL_SIZE, y * PIXEL_SIZE);
+      }
+      ctx.stroke();
+  }
 
-  // --- Draw Selection Highlight (if selected pixel is visible) ---
+  // --- Draw Selection Highlight (double border for visibility) ---
   if (
+    selectedPixelCoords.x !== -1 && selectedPixelCoords.y !== -1 && // Ensure selection exists
     selectedPixelCoords.x >= startCol && selectedPixelCoords.x < endCol &&
-    selectedPixelCoords.y >= startRow && selectedPixelCoords.y < endRow
+    selectedPixelCoords.y >= startRow && selectedPixelCoords.y < endRow // Ensure selection is visible
   ) {
-    ctx.lineWidth = selectedLineWidth;
-    ctx.strokeStyle = selectedStrokeStyle;
-    // Adjust rect slightly for better border visibility
-    const borderOffset = selectedLineWidth / (2 * scale.value); // Adjust offset based on line width in world coords
+     // Calculate stroke positions carefully to avoid blurry lines due to scaling
+     const strokeX = selectedPixelCoords.x * PIXEL_SIZE;
+     const strokeY = selectedPixelCoords.y * PIXEL_SIZE;
+     const strokeW = PIXEL_SIZE;
+     const strokeH = PIXEL_SIZE;
+
+     // Outer White Border (draw slightly outside the pixel bounds)
+     ctx.strokeStyle = selectedStrokeStyleOuter;
+     ctx.lineWidth = selectedLineWidth;
+     // Adjust coordinates by half the line width to center the stroke *on* the edge
      ctx.strokeRect(
-       selectedPixelCoords.x * PIXEL_SIZE + borderOffset,
-       selectedPixelCoords.y * PIXEL_SIZE + borderOffset,
-       PIXEL_SIZE - 2 * borderOffset,
-       PIXEL_SIZE - 2 * borderOffset
+         strokeX - selectedLineWidth / 2,
+         strokeY - selectedLineWidth / 2,
+         strokeW + selectedLineWidth,
+         strokeH + selectedLineWidth
+     );
+
+     // Inner Dark Border (draw slightly inside the pixel bounds)
+     ctx.strokeStyle = selectedStrokeStyleInner;
+     ctx.lineWidth = selectedLineWidth / 2; // Make inner border thinner
+     // Adjust coordinates by half the (thinner) line width
+     ctx.strokeRect(
+         strokeX + selectedLineWidth / 4,
+         strokeY + selectedLineWidth / 4,
+         strokeW - selectedLineWidth / 2,
+         strokeH - selectedLineWidth / 2
      );
   }
 
   ctx.restore(); // Restore from DPR scale + transforms
 };
 
+
 // --- Lifecycle Hooks ---
 const updateCanvasSize = () => {
-  // Update reactive vars for potential template bindings
   canvasWidth.value = window.innerWidth;
   canvasHeight.value = window.innerHeight;
 
   nextTick(() => {
     const canvas = canvasRef.value;
     if (canvas) {
-      const dpr = window.devicePixelRatio || 1;
-      // Set the display size of the canvas
+      // Set display size
       canvas.style.width = `${canvasWidth.value}px`;
       canvas.style.height = `${canvasHeight.value}px`;
-      // Set the actual drawing buffer size accounting for DPR
-      canvas.width = canvasWidth.value * dpr;
-      canvas.height = canvasHeight.value * dpr;
-
-      // No need to scale context here, handled in drawCanvas
-      drawCanvas(); // Redraw after resize
+      // Buffer size handled in drawCanvas, which will be called if needed
+       if(isLoggedIn.value) { // Only redraw if logged in
+           requestAnimationFrame(drawCanvas);
+       }
     }
   });
 };
 
-onMounted(() => {
+// Sets up canvas context and listeners - called after login
+const setupCanvas = () => {
   const canvas = canvasRef.value;
-  if (canvas) {
-    const ctx = canvas.getContext('2d', { alpha: false }); // Improve perf if no transparency needed
+  if (canvas && !ctxRef.value) { // Only setup if not already done
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (ctx) {
       ctxRef.value = ctx;
       console.log('Canvas context obtained.');
       updateCanvasSize(); // Set initial size
 
-       // Initial draw might show loading screen
-       drawCanvas();
-
       // Add event listeners
       canvas.addEventListener('mousedown', handleMouseDown);
       canvas.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp); // Listen on window
-      // canvas.addEventListener('mouseleave', handleMouseUp); // mouseup on window covers this
+      window.addEventListener('mouseup', handleMouseUp); // Use window for mouseup
       canvas.addEventListener('wheel', handleWheel, { passive: false });
 
-      // Connect WebSocket AFTER setting up canvas
-      connectWebSocket();
-
     } else {
-        console.error("Failed to get 2D rendering context.");
-        loadError.value = "Canvas context not available.";
-        isLoading.value = false;
+      console.error("Failed to get 2D rendering context.");
+      loadError.value = "Canvas context not available.";
+      isLoading.value = false; // Stop loading if context fails
+      drawCanvas(); // Attempt to draw error state
     }
-  } else {
-      console.error("Canvas element not found.");
-      loadError.value = "Canvas element failed to mount.";
+  } else if (!canvas) {
+      console.error("Canvas element not found during setupCanvas.");
+      loadError.value = "Canvas element failed to mount properly after login.";
       isLoading.value = false;
   }
+};
+
+onMounted(() => {
+  // Don't setup canvas or connect WS here anymore.
+  // Wait for login.
+  // We still need the resize listener for the overall page layout.
   window.addEventListener('resize', updateCanvasSize);
+  // Initial size update for potential login screen styling
+  updateCanvasSize();
 });
-const chooseColour = (colour:{r:number,g:number,b:number}) => {   // renamed
-  if (
-    selectedPixelCoords.x !== -1 &&
-    selectedPixelCoords.y !== -1 &&
-    pixels.data[selectedPixelCoords.y]             // row safety check
-  ) {
-    // clone so we don’t hold a reference
-    pixels.data[selectedPixelCoords.y][selectedPixelCoords.x] = { ...colour }
-    sendWebSocketMessage({
-    pixel: colour,   // field name must be "pixel"
-    x : selectedPixelCoords.x,
-      y : selectedPixelCoords.y,
-    }) 
-    
-    drawCanvas()
-  }
-}
 
 onBeforeUnmount(() => {
   const canvas = canvasRef.value;
   if (canvas) {
     canvas.removeEventListener('mousedown', handleMouseDown);
     canvas.removeEventListener('mousemove', handleMouseMove);
-    window.removeEventListener('mouseup', handleMouseUp); // Remove window listener
     canvas.removeEventListener('wheel', handleWheel);
   }
+  // Mouseup listener is on window
+  window.removeEventListener('mouseup', handleMouseUp);
   window.removeEventListener('resize', updateCanvasSize);
 
   if (ws.value) {
-    ws.value.onclose = null; // Prevent close handler triggers during unmount
+    ws.value.onclose = null;
     ws.value.onerror = null;
     ws.value.onmessage = null;
     ws.value.onopen = null;
     ws.value.close();
     console.log('WebSocket connection closed during unmount.');
   }
+  // Reset state if component is unmounted
+  isLoggedIn.value = false;
+  username.value = '';
+  ctxRef.value = null;
+  pixels.data = [];
+  loadError.value = null;
+  isLoading.value = false;
 });
 </script>
 
 <template>
   <div class="canvas-wrapper">
-    <canvas
-      ref="canvasRef"
-      class="main-canvas"
-    ></canvas>
-
-    <div v-if="isLoading || loadError" class="status-overlay">
-       {{ loadError || 'Loading Canvas...' }}
-     </div>
-
-    <div class="colour-modal"
-     :class="{ 'modal-visible': isModalVisible }"
-     @mousedown.stop @click.stop @wheel.stop>
-
-  <div class="modal-content">
-    <div class="colour-palette">
-      <div v-for="colour in COLOR_PALETTE"
-           :key="`${colour.r}-${colour.g}-${colour.b}`"
-           class="colour-swatch"
-           :class="{ selected: draftColour && colour === draftColour }"
-           :style="{ backgroundColor: rgbToString(colour),
-            border: draftColour && colour === draftColour
-              ? '2px solid #333'
-              : '2px solid transparent'
-           }"
-           @click="chooseColour(colour)"></div>
+    <div v-if="!isLoggedIn" class="login-container">
+        <div class="login-form">
+            <h2>Enter Canvas</h2>
+            <input
+                type="text"
+                v-model="username"
+                placeholder="Username"
+                @keyup.enter="handleLogin"
+                class="login-input"
+            />
+            <button @click="handleLogin" class="login-button">Enter</button>
+        </div>
     </div>
 
-    <div class="modal-actions">
-      <button @click="closeModal">Cancel</button>
-      <button :disabled="!draftColour" @click="confirmColour">Confirm</button>
-    </div>
-  </div>
-</div>
+    <div v-else class="main-content-area">
+        <canvas
+          ref="canvasRef"
+          class="main-canvas"
+          :width="canvasWidth"
+          :height="canvasHeight"
+          > </canvas>
 
-  </div>
+        <div class="colour-modal"
+             :class="{ 'modal-visible': isModalVisible }"
+             @mousedown.stop @click.stop @wheel.stop> <div class="modal-content">
+            <div class="colour-palette">
+              <div v-for="colour in COLOR_PALETTE"
+                   :key="`${colour.r}-${colour.g}-${colour.b}`"
+                   class="colour-swatch"
+                   :class="{ selected: draftColour && colour.r === draftColour.r && colour.g === draftColour.g && colour.b === draftColour.b }"
+                   :style="{ backgroundColor: rgbToString(colour) }"
+                   @click="chooseColour(colour)">
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="cancel-btn" @click="closeModal">Cancel</button>
+              <button class="confirm-btn"
+                      :disabled="!draftColour"
+                      @click="confirmColour">Confirm</button>
+            </div>
+          </div>
+        </div>
+    </div>   </div>
 </template>
 
 <style scoped>
+/* General Wrapper - Now Black Background */
 .canvas-wrapper {
   position: relative;
   width: 100vw;
   height: 100vh;
-  background-color: #777; /* Darker background for contrast */
-  overflow: hidden;
+  background-color: #ffffff; /* Changed background to black */
+  overflow: hidden; /* Prevent scrollbars */
   display: flex;
   justify-content: center;
   align-items: center;
 }
 
-.main-canvas {
-  /* Let JS set width/height style for DPR */
-  max-width: 100%;
-  max-height: 100%;
-  display: block;
-  cursor: grab;
-  background-color: #ffffff; /* Set a canvas background for loading state */
-  image-rendering: pixelated; /* Better for pixel art when zoomed */
-  image-rendering: crisp-edges;
-}
-
-/* Prevent text selection during drag */
-.main-canvas::selection { background: transparent; }
-.main-canvas::-moz-selection { background: transparent; }
-
-.status-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+/* Login Screen Styles */
+.login-container {
     display: flex;
     justify-content: center;
     align-items: center;
-    background-color: rgba(255, 255, 255, 0.5);
-    color: white;
-    font-size: 1.5em;
-    z-index: 500; /* Below modal */
-    pointer-events: none; /* Allow clicks through if needed, though covered */
+    width: 100%;
+    height: 100%;
 }
 
+.login-form {
+    background-color: #f0f0f0;
+    padding: 30px 40px;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    text-align: center;
+    border: 1px solid #ccc;
+}
+
+.login-form h2 {
+    margin-bottom: 20px;
+    color: #333;
+}
+
+.login-input {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box; /* Include padding in width */
+}
+
+.login-button {
+    padding: 12px 25px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.login-button:hover {
+    background-color: #0056b3;
+}
+
+/* Container for Canvas and Modal when logged in */
+.main-content-area {
+    background-color: #ffffff;
+    width: 100%;
+    height: 100%;
+    position: relative; /* Needed for modal positioning relative to this */
+    display: flex; /* Use flex if needed, or just let canvas fill */
+    justify-content: center;
+    align-items: center;
+}
+
+/* Main Canvas Styles */
+.main-canvas {
+  display: block;
+  cursor: grab;
+  background-color: #c72323; /* Canvas background BEFORE drawing occurs */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  /* width/height style set dynamically */
+}
+
+.main-canvas:active {
+    cursor: grabbing;
+}
+
+.main-canvas::selection { background: transparent; }
+.main-canvas::-moz-selection { background: transparent; }
+
+
+/* Colour Modal Styles */
 .colour-modal {
-  position: fixed; /* Use fixed positioning */
+  position: fixed; /* Fixed relative to viewport */
   bottom: 0;
   left: 0;
   right: 0;
-  width: 100%; /* Ensure full width */
-  background-color: rgba(245, 245, 245, 0.98); /* Slightly opaque background */
+  width: 100%;
+  background-color: rgba(240, 240, 240, 0.95);
   border-top: 1px solid #bbb;
-  box-shadow: 0 -3px 12px rgba(255, 255, 255, 0.2);
-  padding: 12px 0;
-  z-index: 1000; /* Ensure it's above canvas */
-  transform: translateY(100%); /* Start hidden below */
-  transition: transform 0.25s ease-out; /* Animation */
+  box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.15);
+  padding: 15px 0;
+  z-index: 1000;
+  transform: translateY(100%); /* Start hidden */
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   display: flex;
   justify-content: center;
-  box-sizing: border-box; /* Include padding/border in width */
+  box-sizing: border-box;
 }
 
-/* Class applied when isModalVisible is true */
 .colour-modal.modal-visible {
-  transform: translateY(0); /* Slide into view */
+  transform: translateY(0); /* Slide in */
 }
 
 .modal-content {
-   display: flex;
-   flex-direction: column;
-   align-items: center;
-   width: auto;
-   max-width: 95%; /* Limit width */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: auto;
+  max-width: 90%;
 }
 
 .colour-palette {
   display: grid;
-  /* Adjust columns based on available space or keep fixed */
-  grid-template-columns: repeat(8, 1fr); /* 8 columns */
-  gap: 6px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(30px, 1fr));
+  gap: 8px;
+  margin-bottom: 15px;
+  padding: 0 10px;
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
 }
 
 .colour-swatch {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border: 1px solid #ccc;
   cursor: pointer;
-  border-radius: 4px;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  border-radius: 5px;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-sizing: border-box;
 }
 
-/* highlight the chosen colour */
-.colour-swatch.selected {
-  border: 3px solid #000000;          /* visible white ring */
-  box-shadow: 0 0 0 2px #000 inset;/* thin dark ring inside for contrast */
-  box-sizing: border-box;          /* keep the overall size the same */
-}
 .colour-swatch:hover {
   transform: scale(1.1);
-  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  box-shadow: 0 3px 6px rgba(0,0,0,0.2);
   border-color: #888;
 }
 
-.close-modal-btn {
-    padding: 6px 14px;
-    border: 1px solid #aaa;
-    background-color: #eee;
-    color: #333;
-    cursor: pointer;
-    border-radius: 4px;
-    font-size: 0.9em;
-    transition: background-color 0.1s ease;
+.colour-swatch.selected {
+  border: 2px solid #ffffff;
+  outline: 2px solid #007bff;
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.3);
+  transform: scale(1.05);
 }
 
+.modal-actions {
+  display: flex;
+  gap: 15px;
+}
+
+.modal-actions button {
+  padding: 10px 20px;
+  border-radius: 5px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.modal-actions button:hover {
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    transform: translateY(-1px);
+}
+.modal-actions button:active {
+    transform: translateY(0px);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+
+
+.modal-actions .cancel-btn {
+  background-color: #f8f9fa;
+  border: 1px solid #ced4da;
+  color: #495057;
+}
+.modal-actions .cancel-btn:hover {
+  background-color: #e9ecef;
+}
+
+.modal-actions .confirm-btn {
+  background-color: #007bff;
+  color: white;
+}
+.modal-actions .confirm-btn:hover {
+  background-color: #0056b3;
+}
+
+.modal-actions .confirm-btn:disabled {
+  background-color: #cccccc;
+  color: #666666;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
 
 </style>

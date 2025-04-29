@@ -11,7 +11,7 @@ import (
 
 const (
 	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
+	pongWait       = 180 * time.Second
 	pingPeriod     = (pongWait * 15) / 10
 	maxMessageSize = 512
 	boardWidth     = 10
