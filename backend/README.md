@@ -17,3 +17,5 @@
 
     - for all client != uuid 
         - send them the pos and rgb
+
+    
